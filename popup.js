@@ -27,12 +27,19 @@ function switchToTab(tab) {
   chrome.windows.getCurrent({}, (currentWindow) => {
     if (currentWindow.id === tab.windowId) {
       // Same window, just activate the tab
-      chrome.tabs.update(tab.id, { active: true });
+      chrome.tabs.update(tab.id, { active: true })
+        .catch(err => console.error('Error activating tab:', err));
     } else {
       // Different window, focus it first
-      chrome.windows.update(tab.windowId, { focused: true }, () => {
-        chrome.tabs.update(tab.id, { active: true });
-      });
+      chrome.windows.update(tab.windowId, { focused: true })
+        .then(() => {
+          // Add a small delay to ensure window is focused
+          setTimeout(() => {
+            chrome.tabs.update(tab.id, { active: true })
+              .catch(err => console.error('Error activating tab after window focus:', err));
+          }, 150); // 150ms delay
+        })
+        .catch(err => console.error('Error focusing window:', err));
     }
   });
 }
@@ -40,6 +47,7 @@ function switchToTab(tab) {
 // Store filtered tabs and selection state globally
 let currentFilteredTabs = [];
 let selectedTabIndex = -1;
+let activeWindowId = null;
 
 function updateSelection() {
   // Remove selection from all tabs
@@ -116,8 +124,13 @@ function renderTabList(tabList, searchTerm = '') {
       urlSpan.style.color = '#666';
       li.appendChild(urlSpan);
 
-      // Highlight active tab
-      if (tab.isActiveTab) {
+      // Log information about each tab
+      console.log(`Tab: ${tab.title} | Window ID: ${windowId} (${typeof windowId}) | Active Window ID: ${activeWindowId} (${typeof activeWindowId}) | isActiveTab: ${tab.isActiveTab}`);
+      console.log(`Comparison result: ${tab.isActiveTab && String(windowId) === String(activeWindowId)}`);
+      
+      // Only highlight the active tab in the active window - convert both to strings for comparison
+      if (tab.isActiveTab && String(windowId) === String(activeWindowId)) {
+        console.log(`Highlighting tab: ${tab.title}`);
         li.classList.add('active-tab');
       }
 
@@ -132,21 +145,65 @@ function renderTabList(tabList, searchTerm = '') {
 }
 
 document.addEventListener("DOMContentLoaded", function () {
-  // Initial render
-  chrome.storage.local.get('tabList', function(result) {
-    const tabList = result.tabList || [];
-    renderTabList(tabList);
+  // Get the active window ID and active tab ID when popup opens
+  console.log("Getting current window and active tab...");
+  
+  // Get the current window
+  chrome.windows.getCurrent({}, (currentWindow) => {
+    console.log("Current window:", currentWindow);
+    activeWindowId = currentWindow.id;
+    console.log("Active window ID:", activeWindowId, "Type:", typeof activeWindowId);
+    
+    // Get the active tab in the current window
+    chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
+      console.log("Active tabs in current window:", activeTabs);
+      
+      let activeTabId = null;
+      if (activeTabs.length > 0) {
+        const activeTab = activeTabs[0];
+        activeTabId = activeTab.id;
+        console.log("Active tab ID:", activeTab.id, "Window ID:", activeTab.windowId);
+      }
+      
+      // Initial render with the active window ID
+      chrome.storage.local.get('tabList', function(result) {
+        const tabList = result.tabList || [];
+        console.log("Tab list from storage:", tabList);
+        
+        // Log window IDs and active tabs
+        const windowIds = [...new Set(tabList.map(tab => tab.windowId))];
+        console.log("Window IDs in tab list:", windowIds);
+        
+        const activeTabs = tabList.filter(tab => tab.isActiveTab);
+        console.log("Active tabs in tab list:", activeTabs);
+        
+        // Mark the active tab in the tab list
+        const updatedTabList = tabList.map(tab => {
+          // Reset isActiveTab for all tabs
+          tab.isActiveTab = false;
+          
+          // Set isActiveTab to true for the active tab in the current window
+          if (tab.id === activeTabId && String(tab.windowId) === String(activeWindowId)) {
+            console.log("Marking tab as active:", tab.title);
+            tab.isActiveTab = true;
+          }
+          
+          return tab;
+        });
+        
+        renderTabList(updatedTabList);
+        
+        // Auto-select the first item if there are results
+        if (currentFilteredTabs.length > 0) {
+          selectedTabIndex = 0;
+          updateSelection();
+        }
+      });
+    });
   });
 
   // Set up search and keyboard navigation
   const searchInput = document.getElementById('searchInput');
-  
-  searchInput.addEventListener('input', function(e) {
-    chrome.storage.local.get('tabList', function(result) {
-      const tabList = result.tabList || [];
-      renderTabList(tabList, e.target.value.trim());
-    });
-  });
 
   // Set up keyboard navigation
   document.addEventListener('keydown', function(e) {
@@ -159,17 +216,60 @@ document.addEventListener("DOMContentLoaded", function () {
       const tabToActivate = selectedTabIndex >= 0 ? 
         currentFilteredTabs[selectedTabIndex] : 
         currentFilteredTabs[0];
-      switchToTab(tabToActivate);
-      window.close();
+      
+      // Get current window to check if we're switching to a tab in a different window
+      chrome.windows.getCurrent({}, (currentWindow) => {
+        const isTabInDifferentWindow = currentWindow.id !== tabToActivate.windowId;
+        
+        // Call switchToTab
+        switchToTab(tabToActivate);
+        
+        // Delay closing the popup, with a longer delay for tabs in different windows
+        setTimeout(() => {
+          window.close();
+        }, isTabInDifferentWindow ? 200 : 50);
+      });
     }
   });
 
   // Reset selection when search changes
   searchInput.addEventListener('input', function(e) {
-    selectedTabIndex = -1;
     chrome.storage.local.get('tabList', function(result) {
       const tabList = result.tabList || [];
-      renderTabList(tabList, e.target.value.trim());
+      const searchTerm = e.target.value.trim();
+      
+      // Get the active tab in the current window
+      chrome.tabs.query({ active: true, currentWindow: true }, (activeTabs) => {
+        let activeTabId = null;
+        if (activeTabs.length > 0) {
+          const activeTab = activeTabs[0];
+          activeTabId = activeTab.id;
+        }
+        
+        // Mark the active tab in the tab list
+        const updatedTabList = tabList.map(tab => {
+          // Reset isActiveTab for all tabs
+          tab.isActiveTab = false;
+          
+          // Set isActiveTab to true for the active tab in the current window
+          if (tab.id === activeTabId && String(tab.windowId) === String(activeWindowId)) {
+            tab.isActiveTab = true;
+          }
+          
+          return tab;
+        });
+        
+        // Render the filtered list
+        renderTabList(updatedTabList, searchTerm);
+        
+        // Auto-select the first item if there are results
+        if (currentFilteredTabs.length > 0) {
+          selectedTabIndex = 0;
+          updateSelection();
+        } else {
+          selectedTabIndex = -1;
+        }
+      });
     });
   });
 

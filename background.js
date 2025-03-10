@@ -126,7 +126,9 @@ async function sendToServer(data) {
 
 async function updateTabList() {
   chrome.tabs.query({}, async function (tabs) {
+    console.log("All tabs:", tabs);
     const tabList = tabs.map(tab => {
+      console.log(`Setting tab data: ID: ${tab.id}, Title: ${tab.title}, Window: ${tab.windowId}, Active: ${tab.active}`);
       return {
         windowId: tab.windowId,
         id: tab.id,
