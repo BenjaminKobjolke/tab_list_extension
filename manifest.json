@@ -24,13 +24,5 @@
   "icons": {
     "128": "icon.png"
   },
-  "options_page": "options.html",
-  "commands": {
-    "open-tab-search": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+P"
-      },
-      "description": "Open tab search popup"
-    }
-  }
+  "options_page": "options.html"  
 }
